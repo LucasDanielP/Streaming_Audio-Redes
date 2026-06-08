@@ -2,3 +2,5 @@ output/
 *.raw
 *.mp3
 !assets/sample.wav
+!assets/sample_long.wav
+README.md

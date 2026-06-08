@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -17,6 +18,8 @@ type Radio struct {
 	addr      string
 	audioPath string
 	chunkWait time.Duration
+	meta          protocol.AudioMeta
+	pcmDataOffset int64 // bytes a pular no início de cada loop (cabeçalho WAV)
 
 	mu      sync.RWMutex
 	clients map[net.Conn]struct{}
@@ -26,13 +29,19 @@ type Radio struct {
 }
 
 // New cria um servidor de rádio configurado.
-func New(addr, audioPath string, chunkWait time.Duration) *Radio {
-	return &Radio{
-		addr:      addr,
-		audioPath: audioPath,
-		chunkWait: chunkWait,
-		clients:   make(map[net.Conn]struct{}),
+func New(addr, audioPath string, chunkWait time.Duration) (*Radio, error) {
+	meta, pcmOffset, err := detectAudioMeta(audioPath)
+	if err != nil {
+		return nil, err
 	}
+	return &Radio{
+		addr:          addr,
+		audioPath:     audioPath,
+		chunkWait:     chunkWait,
+		meta:          meta,
+		pcmDataOffset: pcmOffset,
+		clients:       make(map[net.Conn]struct{}),
+	}, nil
 }
 
 // Run inicia o listener TCP e o loop de transmissão de áudio.
@@ -43,7 +52,8 @@ func (r *Radio) Run() error {
 	}
 	defer ln.Close()
 
-	log.Printf("[servidor] rádio iniciada em %s | arquivo: %s", r.addr, r.audioPath)
+	log.Printf("[servidor] rádio iniciada em %s | arquivo: %s | formato: %s %dHz %dch %dbit | transmite só PCM",
+		r.addr, r.audioPath, r.meta.Codec, r.meta.SampleRate, r.meta.Channels, r.meta.BitsPerSample)
 
 	go r.broadcastLoop()
 
@@ -58,6 +68,14 @@ func (r *Radio) Run() error {
 }
 
 func (r *Radio) addClient(conn net.Conn) {
+	if err := protocol.WriteMetaFrame(conn, r.meta); err != nil {
+		_ = conn.Close()
+		log.Printf("[servidor] falha ao enviar metadados para %s: %v", conn.RemoteAddr(), err)
+		return
+	}
+	log.Printf("[servidor] metadados enviados para %s | codec=%s %dHz",
+		conn.RemoteAddr(), r.meta.Codec, r.meta.SampleRate)
+
 	r.mu.Lock()
 	r.clients[conn] = struct{}{}
 	count := len(r.clients)
@@ -86,7 +104,6 @@ func (r *Radio) removeClient(conn net.Conn) {
 func (r *Radio) watchClient(conn net.Conn) {
 	buf := make([]byte, 1)
 	for {
-		// Descarta qualquer dado enviado pelo cliente; detecta desconexão por EOF.
 		_, err := conn.Read(buf)
 		if err != nil {
 			r.removeClient(conn)
@@ -110,6 +127,12 @@ func (r *Radio) streamFileOnce() error {
 		return err
 	}
 	defer f.Close()
+
+	if r.pcmDataOffset > 0 {
+		if _, err := f.Seek(r.pcmDataOffset, io.SeekStart); err != nil {
+			return fmt.Errorf("pular cabeçalho WAV: %w", err)
+		}
+	}
 
 	buf := make([]byte, protocol.ChunkSize)
 	for {
@@ -158,7 +181,7 @@ func (r *Radio) broadcast(payload []byte) {
 		wg.Add(1)
 		go func(c net.Conn) {
 			defer wg.Done()
-			if err := protocol.WriteFrame(c, payload); err != nil {
+			if err := protocol.WriteAudioFrame(c, payload); err != nil {
 				failedMu.Lock()
 				failed = append(failed, c)
 				failedMu.Unlock()

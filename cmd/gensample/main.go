@@ -11,15 +11,15 @@ import (
 
 func main() {
 	out := flag.String("out", "assets/sample.wav", "caminho de saída")
+	duration := flag.Int("duration", 3, "duração em segundos")
 	flag.Parse()
 
 	const (
 		sampleRate = 44100
-		duration   = 3 // segundos
 		freq       = 440.0
 	)
 
-	numSamples := sampleRate * duration
+	numSamples := sampleRate * (*duration)
 	dataSize := numSamples * 2 // 16-bit mono
 
 	f, err := os.Create(*out)
@@ -49,7 +49,8 @@ func main() {
 		_ = binary.Write(f, binary.LittleEndian, sample)
 	}
 
-	log.Printf("arquivo gerado: %s (%d amostras)", *out, numSamples)
+	log.Printf("arquivo gerado: %s (%d s, %d amostras, %d bytes)",
+		*out, *duration, numSamples, 44+dataSize)
 }
 
 func writeString(f *os.File, s string) {

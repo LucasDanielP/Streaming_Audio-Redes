@@ -26,7 +26,8 @@ internal/
   server/     # aceita TCP, broadcast
   client/     # recebe fluxo e comandos locais
 assets/
-  sample.wav  # áudio de exemplo (gerado)
+  sample.wav       # áudio curto (3 s, gerado)
+  sample_long.wav  # áudio longo (15 s, gerado) — padrão do servidor
 ```
 
 ## Pré-requisitos
@@ -38,11 +39,12 @@ assets/
 ```bash
 cd Streaming_Audio-Redes
 
-# 1) Gerar áudio de teste (ou coloque seu .wav/.mp3 em assets/)
+# 1) Gerar áudios de teste (ou coloque seu .wav/.mp3 em assets/)
 go run ./cmd/gensample
+go run ./cmd/gensample -out assets/sample_long.wav -duration 15
 
-# 2) Iniciar o servidor
-go run ./cmd/server -addr :9090 -audio assets/sample.wav
+# 2) Iniciar o servidor (usa sample_long.wav por padrão)
+go run ./cmd/server -addr :9090
 
 # 3) Em outro terminal — primeiro cliente
 go run ./cmd/client -addr localhost:9090 -output output/cliente1.wav
@@ -51,21 +53,41 @@ go run ./cmd/client -addr localhost:9090 -output output/cliente1.wav
 go run ./cmd/client -addr localhost:9090 -output output/cliente2.wav
 ```
 
+### Reprodução em tempo real
+
+```bash
+# Ouvir enquanto recebe (sem gravar)
+go run ./cmd/client -addr localhost:9090 -play -output -
+
+# Ouvir e gravar ao mesmo tempo
+go run ./cmd/client -addr localhost:9090 -play -output output/cliente1.wav
+```
+
+O player usa um **buffer que cresce** conforme pacotes chegam — o som não para quando o trecho inicial acaba; novos pacotes entram no buffer e continuam sendo reproduzidos.
+
 ### Comandos no cliente
 
 No prompt `> `:
 
-- `pause` ou `p` — pausa a gravação local (o fluxo continua chegando)
-- `resume` ou `r` — retoma a gravação
+- `pause` ou `p` — pausa gravação e reprodução local (o fluxo continua chegando)
+- `resume` ou `r` — retoma gravação e reprodução
 - `stop` ou `s` — encerra o cliente
-- `status` — mostra pacotes recebidos e bytes gravados
+- `status` — mostra pacotes, bytes gravados e buffer de reprodução
+
+### Flags do cliente
+
+| Flag | Padrão | Descrição |
+|------|--------|-----------|
+| `-addr` | `localhost:9090` | Endereço do servidor |
+| `-output` | `output/recebido.wav` | Arquivo de saída (`-` para não gravar) |
+| `-play` | `false` | Reproduzir áudio em tempo real (PCM 16-bit) |
 
 ### Flags do servidor
 
 | Flag | Padrão | Descrição |
 |------|--------|-----------|
 | `-addr` | `:9090` | Porta TCP |
-| `-audio` | `assets/sample.wav` | Arquivo transmitido em loop |
+| `-audio` | `assets/sample_long.wav` | Arquivo transmitido em loop |
 | `-chunk-ms` | `20` | Intervalo entre blocos (ms) |
 
 ### Áudio próprio
@@ -86,15 +108,30 @@ go run ./cmd/server -audio /caminho/para/musica.mp3
 4. Comandos `pause` / `resume` / `stop` no cliente
 5. Arquivos `output/cliente1.wav` reproduzíveis (ex.: `afplay output/cliente1.wav` no macOS)
 
-## Protocolo (Fase 1)
+### Gravação no cliente
+
+O servidor transmite **somente PCM** (pula o cabeçalho `RIFF` do arquivo). O cliente monta o cabeçalho WAV a partir dos metadados e concatena cada pacote de áudio recebido. Ex.: 2 loops de 15 s → arquivo de ~30 s reproduzível.
+
+## Protocolo (Fase 1 + handshake)
 
 Cada mensagem TCP:
 
 ```
-[4 bytes: tamanho big-endian][payload]
+[4 bytes: tamanho big-endian][1 byte: tipo][payload]
 ```
 
-Todos os clientes recebem os mesmos blocos no mesmo instante (broadcast).
+| Tipo | Valor | Quando |
+|------|-------|--------|
+| Metadados | `0x01` | Uma vez, ao conectar (só para aquele cliente) |
+| Áudio | `0x02` | Continuamente (broadcast para todos) |
+
+Exemplo de metadados (JSON):
+
+```json
+{"codec":"pcm","container":"wav","sample_rate":44100,"channels":1,"bits_per_sample":16,"source":"sample_long.wav"}
+```
+
+O cliente usa os metadados para montar o cabeçalho WAV localmente e gravar desde o 1º pacote de áudio, mesmo entrando no meio do loop.
 
 ## Próximos passos (fora do MVP)
 
