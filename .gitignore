@@ -1,0 +1,4 @@
+output/
+*.raw
+*.mp3
+!assets/sample.wav
