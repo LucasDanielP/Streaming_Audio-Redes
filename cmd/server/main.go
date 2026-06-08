@@ -10,7 +10,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":9090", "endereço TCP do servidor (ex: :9090)")
-	audio := flag.String("audio", "assets/sample_long.wav", "caminho do arquivo de áudio (.wav ou .mp3)")
+	audio := flag.String("audio", "assets/musica.wav", "caminho do arquivo de áudio (.wav ou .mp3)")
 	chunkMs := flag.Int("chunk-ms", 20, "intervalo em ms entre blocos (simula streaming)")
 	flag.Parse()
 

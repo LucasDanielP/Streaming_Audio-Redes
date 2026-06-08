@@ -20,36 +20,30 @@ Trabalho de Redes — rádio TCP em Go que transmite um arquivo de áudio em loo
 cmd/
   server/     # servidor de rádio
   client/     # ouvinte
-  gensample/  # gera WAV de teste
 internal/
-  protocol/   # framing [tamanho][dados]
+  protocol/   # framing [tamanho][tipo][dados]
   server/     # aceita TCP, broadcast
-  client/     # recebe fluxo e comandos locais
-assets/
-  sample.wav       # áudio curto (3 s, gerado)
-  sample_long.wav  # áudio longo (15 s, gerado) — padrão do servidor
+  client/     # recebe fluxo, gravação e reprodução
+assets/       # coloque aqui seu .wav ou .mp3
 ```
 
 ## Pré-requisitos
 
 - Go 1.22+
+- Um arquivo de áudio (`.wav` ou `.mp3`) em `assets/` ou outro caminho
 
 ## Uso rápido
 
 ```bash
 cd Streaming_Audio-Redes
 
-# 1) Gerar áudios de teste (ou coloque seu .wav/.mp3 em assets/)
-go run ./cmd/gensample
-go run ./cmd/gensample -out assets/sample_long.wav -duration 15
+# 1) Iniciar o servidor (informe seu arquivo de áudio)
+go run ./cmd/server -addr :9090 -audio assets/musica.wav
 
-# 2) Iniciar o servidor (usa sample_long.wav por padrão)
-go run ./cmd/server -addr :9090
-
-# 3) Em outro terminal — primeiro cliente
+# 2) Em outro terminal — primeiro cliente
 go run ./cmd/client -addr localhost:9090 -output output/cliente1.wav
 
-# 4) Em outro terminal — segundo cliente (mesmo fluxo)
+# 3) Em outro terminal — segundo cliente (mesmo fluxo)
 go run ./cmd/client -addr localhost:9090 -output output/cliente2.wav
 ```
 
@@ -87,16 +81,8 @@ No prompt `> `:
 | Flag | Padrão | Descrição |
 |------|--------|-----------|
 | `-addr` | `:9090` | Porta TCP |
-| `-audio` | `assets/sample_long.wav` | Arquivo transmitido em loop |
+| `-audio` | `assets/musica.wav` | Arquivo transmitido em loop |
 | `-chunk-ms` | `20` | Intervalo entre blocos (ms) |
-
-### Áudio próprio
-
-Use qualquer `.wav` ou `.mp3`:
-
-```bash
-go run ./cmd/server -audio /caminho/para/musica.mp3
-```
 
 > A primeira versão reenvia o arquivo do início ao fim em loop, conforme o enunciado.
 
@@ -110,7 +96,7 @@ go run ./cmd/server -audio /caminho/para/musica.mp3
 
 ### Gravação no cliente
 
-O servidor transmite **somente PCM** (pula o cabeçalho `RIFF` do arquivo). O cliente monta o cabeçalho WAV a partir dos metadados e concatena cada pacote de áudio recebido. Ex.: 2 loops de 15 s → arquivo de ~30 s reproduzível.
+O servidor transmite **somente PCM** (pula o cabeçalho `RIFF` do arquivo). O cliente monta o cabeçalho WAV a partir dos metadados e concatena cada pacote de áudio recebido.
 
 ## Protocolo (Fase 1 + handshake)
 
@@ -128,7 +114,7 @@ Cada mensagem TCP:
 Exemplo de metadados (JSON):
 
 ```json
-{"codec":"pcm","container":"wav","sample_rate":44100,"channels":1,"bits_per_sample":16,"source":"sample_long.wav"}
+{"codec":"pcm","container":"wav","sample_rate":44100,"channels":1,"bits_per_sample":16,"source":"musica.wav"}
 ```
 
 O cliente usa os metadados para montar o cabeçalho WAV localmente e gravar desde o 1º pacote de áudio, mesmo entrando no meio do loop.
@@ -137,4 +123,4 @@ O cliente usa os metadados para montar o cabeçalho WAV localmente e gravar desd
 
 - Captura de áudio ao vivo (microfone)
 - Sincronização mais fina com RTP
-- Reprodução em tempo real no cliente (sem só gravar)
+- Reprodução de MP3 ao vivo (decoder)
