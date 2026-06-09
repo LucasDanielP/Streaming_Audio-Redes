@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"streaming-audio-redes/internal/netx"
 	"streaming-audio-redes/internal/protocol"
 )
 
@@ -52,13 +53,27 @@ func New(addr, outputPath string, playLive bool) *Listener {
 	}
 }
 
-// Run conecta ao servidor, lê metadados e inicia recepção.
+// Run conecta ao servidor com comandos no terminal (modo CLI).
 func (l *Listener) Run() error {
 	conn, err := net.Dial("tcp", l.addr)
 	if err != nil {
 		return fmt.Errorf("conexão com servidor: %w", err)
 	}
+	return l.serve(conn, true)
+}
+
+// RunHeadless conecta e recebe o fluxo sem prompt de terminal (para GUI).
+func (l *Listener) RunHeadless() error {
+	conn, err := net.Dial("tcp", l.addr)
+	if err != nil {
+		return fmt.Errorf("conexão com servidor: %w", err)
+	}
+	return l.serve(conn, false)
+}
+
+func (l *Listener) serve(conn net.Conn, interactive bool) error {
 	defer conn.Close()
+	netx.EnableLowLatency(conn)
 
 	log.Printf("[cliente] conectado a %s", l.addr)
 
@@ -77,6 +92,7 @@ func (l *Listener) Run() error {
 		}
 		l.player = player
 		defer l.player.Close()
+		go l.player.startAfterPrebuffer()
 	}
 
 	if l.saveToFile {
@@ -97,7 +113,9 @@ func (l *Listener) Run() error {
 		errCh <- l.receiveLoop(conn)
 	}()
 
-	go l.commandLoop()
+	if interactive {
+		go l.commandLoop()
+	}
 
 	err = <-errCh
 	if l.getState() == StateStopped {
@@ -209,7 +227,7 @@ func (l *Listener) receiveLoop(conn net.Conn) error {
 			return nil
 		}
 
-		frame, err := protocol.ReadAudioFrame(conn)
+		frameType, payload, err := protocol.ReadTypedFrame(conn)
 		if err != nil {
 			if l.getState() == StateStopped {
 				return nil
@@ -217,6 +235,19 @@ func (l *Listener) receiveLoop(conn net.Conn) error {
 			return fmt.Errorf("leitura do fluxo: %w", err)
 		}
 
+		switch frameType {
+		case protocol.FrameTypeMeta:
+			if err := l.applyMeta(payload); err != nil {
+				log.Printf("[cliente] aviso ao aplicar metadados: %v", err)
+			}
+			continue
+		case protocol.FrameTypeAudio:
+			// segue abaixo
+		default:
+			continue
+		}
+
+		frame := payload
 		l.mu.Lock()
 		l.packetsReceived++
 		pkt := l.packetsReceived
@@ -240,6 +271,43 @@ func (l *Listener) receiveLoop(conn net.Conn) error {
 			return err
 		}
 	}
+}
+
+func (l *Listener) applyMeta(payload []byte) error {
+	meta, err := protocol.ParseMeta(payload)
+	if err != nil {
+		return err
+	}
+
+	l.mu.Lock()
+	l.meta = meta
+	playLive := l.playLive
+	player := l.player
+	l.mu.Unlock()
+
+	log.Printf("[cliente] metadados atualizados | fonte=%s | %dHz %dch %dbit",
+		meta.Source, meta.SampleRate, meta.Channels, meta.BitsPerSample)
+
+	if !playLive {
+		return nil
+	}
+
+	if player == nil {
+		p, err := newStreamPlayer(meta)
+		if err != nil {
+			return err
+		}
+		l.mu.Lock()
+		l.player = p
+		l.mu.Unlock()
+		go p.startAfterPrebuffer()
+		return nil
+	}
+
+	if err := player.ApplyMeta(meta); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (l *Listener) commandLoop() {
@@ -296,6 +364,68 @@ func (l *Listener) commandLoop() {
 			fmt.Printf("comando desconhecido: %q (use pause, resume ou stop)\n", cmd)
 		}
 	}
+}
+
+// Stats resume o estado atual do ouvinte (útil para GUI).
+type Stats struct {
+	State       State
+	StateLabel  string
+	Packets     uint64
+	PCMBytes    uint32
+	DurationSec float64
+	BufferBytes int
+	LatencyMs   float64
+	Source      string
+}
+
+func (l *Listener) Stats() Stats {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var durationSec float64
+	if l.meta.SampleRate > 0 && l.meta.Channels > 0 && l.meta.BitsPerSample > 0 {
+		durationSec = float64(l.pcmDataSize) / float64(l.meta.SampleRate*uint32(l.meta.Channels)*uint32(l.meta.BitsPerSample)/8)
+	}
+	buf := 0
+	var latencyMs float64
+	if l.player != nil {
+		buf = l.player.BufferedBytes()
+		if l.meta.SampleRate > 0 && l.meta.Channels > 0 && l.meta.BitsPerSample > 0 {
+			bps := float64(l.meta.SampleRate) * float64(l.meta.Channels) * float64(l.meta.BitsPerSample) / 8
+			latencyMs = float64(buf) / bps * 1000
+		}
+	}
+	return Stats{
+		State:       l.state,
+		StateLabel:  stateLabel(l.state),
+		Packets:     l.packetsReceived,
+		PCMBytes:    l.pcmDataSize,
+		DurationSec: durationSec,
+		BufferBytes: buf,
+		LatencyMs:   latencyMs,
+		Source:      l.meta.Source,
+	}
+}
+
+// Pause suspende gravação e reprodução local.
+func (l *Listener) Pause() {
+	l.setState(StatePaused)
+	if l.player != nil {
+		l.player.SetPaused(true)
+	}
+}
+
+// Resume retoma gravação e reprodução local.
+func (l *Listener) Resume() {
+	l.setState(StatePlaying)
+	if l.player != nil {
+		l.player.SetPaused(false)
+	}
+}
+
+// Stop encerra a sessão do ouvinte.
+func (l *Listener) Stop() {
+	l.setState(StateStopped)
 }
 
 func (l *Listener) getState() State {

@@ -6,24 +6,36 @@ import (
 	"io"
 )
 
-// ChunkSize é o tamanho máximo de cada bloco de áudio enviado pelo servidor.
+// ChunkSize é o tamanho de cada bloco PCM (múltiplo de frame estéreo 16-bit).
+// 4096 bytes ≈ 23 ms em PCM 44.1 kHz estéreo.
 const ChunkSize = 4096
+
+func writeAll(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return nil
+}
 
 // WriteTypedFrame envia [4 bytes tamanho][1 byte tipo][payload].
 // O tamanho inclui o byte de tipo.
 func WriteTypedFrame(w io.Writer, frameType byte, payload []byte) error {
 	size := uint32(1 + len(payload))
-	header := make([]byte, 4)
+	header := make([]byte, 5)
 	binary.BigEndian.PutUint32(header, size)
-	if _, err := w.Write(header); err != nil {
-		return err
-	}
-	if _, err := w.Write([]byte{frameType}); err != nil {
+	header[4] = frameType
+	if err := writeAll(w, header); err != nil {
 		return err
 	}
 	if len(payload) > 0 {
-		_, err := w.Write(payload)
-		return err
+		return writeAll(w, payload)
 	}
 	return nil
 }
@@ -72,16 +84,4 @@ func ReadMetaFrame(r io.Reader) (AudioMeta, error) {
 		return AudioMeta{}, fmt.Errorf("esperado frame de metadados (0x01), recebido 0x%02x", frameType)
 	}
 	return ParseMeta(payload)
-}
-
-// ReadAudioFrame lê o próximo bloco de áudio do fluxo.
-func ReadAudioFrame(r io.Reader) ([]byte, error) {
-	frameType, payload, err := ReadTypedFrame(r)
-	if err != nil {
-		return nil, err
-	}
-	if frameType != FrameTypeAudio {
-		return nil, fmt.Errorf("esperado frame de áudio (0x02), recebido 0x%02x", frameType)
-	}
-	return payload, nil
 }

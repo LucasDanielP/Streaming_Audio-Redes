@@ -1,0 +1,21 @@
+package ui
+
+import "image/color"
+
+// Paleta inspirada em design system/interface-para-radio (retro FM).
+var (
+	ColorBackground    = color.NRGBA{R: 0x5a, G: 0x48, B: 0x38, A: 0xff}
+	ColorCard          = color.NRGBA{R: 0x6e, G: 0x5a, B: 0x45, A: 0xff}
+	ColorDisplay       = color.NRGBA{R: 0x3d, G: 0x34, B: 0x28, A: 0xff}
+	ColorBorder        = color.NRGBA{R: 0x4a, G: 0x40, B: 0x35, A: 0xff}
+	ColorPrimary       = color.NRGBA{R: 0xd4, G: 0xa8, B: 0x4b, A: 0xff}
+	ColorPrimaryText   = color.NRGBA{R: 0x3a, G: 0x2e, B: 0x24, A: 0xff}
+	ColorAccent        = color.NRGBA{R: 0xc4, G: 0x5c, B: 0x3e, A: 0xff}
+	ColorAccentText    = color.NRGBA{R: 0xf8, G: 0xf2, B: 0xe8, A: 0xff}
+	ColorForeground    = color.NRGBA{R: 0xf5, G: 0xf0, B: 0xe6, A: 0xff}
+	ColorMuted         = color.NRGBA{R: 0xc9, G: 0xb8, B: 0x9a, A: 0xff}
+	ColorSecondary     = color.NRGBA{R: 0x7a, G: 0x65, B: 0x50, A: 0xff}
+	ColorVuLow         = color.NRGBA{R: 0xe0, G: 0xc8, B: 0x88, A: 0xff}
+	ColorVuMid         = color.NRGBA{R: 0xd4, G: 0xa8, B: 0x4b, A: 0xff}
+	ColorVuHigh        = color.NRGBA{R: 0xc4, G: 0x5c, B: 0x3e, A: 0xff}
+)

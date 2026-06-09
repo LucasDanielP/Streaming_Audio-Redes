@@ -5,18 +5,20 @@ import (
 	"sync"
 )
 
-// pcmBuffer é um buffer thread-safe que cresce conforme pacotes chegam.
-// O player lê dele em loop contínuo — novos bytes são consumidos automaticamente.
+// Buffer de jitter: evita underruns (áudio travado) sem acumular segundos de atraso.
+const defaultMaxBufferMs = 600
+
 type pcmBuffer struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	data   []byte
-	closed bool
-	paused bool
+	mu       sync.Mutex
+	cond     *sync.Cond
+	data     []byte
+	maxBytes int
+	closed   bool
+	paused   bool
 }
 
-func newPCMBuffer() *pcmBuffer {
-	b := &pcmBuffer{}
+func newPCMBuffer(maxBytes int) *pcmBuffer {
+	b := &pcmBuffer{maxBytes: maxBytes}
 	b.cond = sync.NewCond(&b.mu)
 	return b
 }
@@ -31,14 +33,32 @@ func (b *pcmBuffer) Write(p []byte) {
 		return
 	}
 	b.data = append(b.data, p...)
+	b.trimLocked()
 	b.cond.Broadcast()
+}
+
+func (b *pcmBuffer) trimLocked() {
+	if b.maxBytes <= 0 || len(b.data) <= b.maxBytes {
+		return
+	}
+	drop := len(b.data) - b.maxBytes
+	b.data = b.data[drop:]
+}
+
+func (b *pcmBuffer) Clear() {
+	b.mu.Lock()
+	b.data = nil
+	b.mu.Unlock()
 }
 
 func (b *pcmBuffer) SetPaused(paused bool) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.paused && !paused {
+		b.data = nil
+	}
 	b.paused = paused
 	b.cond.Broadcast()
-	b.mu.Unlock()
 }
 
 func (b *pcmBuffer) Close() {

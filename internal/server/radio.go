@@ -1,59 +1,54 @@
 package server
 
 import (
-	"fmt"
-	"io"
+	"context"
 	"log"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"streaming-audio-redes/internal/netx"
 	"streaming-audio-redes/internal/protocol"
 )
 
-// Radio é o servidor TCP que transmite áudio em loop para todos os clientes.
+// Radio é o servidor TCP que transmite áudio para todos os clientes conectados.
 type Radio struct {
-	addr      string
-	audioPath string
-	chunkWait time.Duration
-	meta          protocol.AudioMeta
-	pcmDataOffset int64 // bytes a pular no início de cada loop (cabeçalho WAV)
+	addr   string
+	source AudioSource
 
 	mu      sync.RWMutex
 	clients map[net.Conn]struct{}
 
-	listenerCount atomic.Int64
-	packetCount   atomic.Uint64
+	packetCount atomic.Uint64
 }
 
-// New cria um servidor de rádio configurado.
-func New(addr, audioPath string, chunkWait time.Duration) (*Radio, error) {
-	meta, pcmOffset, err := detectAudioMeta(audioPath)
-	if err != nil {
-		return nil, err
-	}
+// New cria um servidor de rádio com a fonte de áudio informada.
+func New(addr string, source AudioSource) *Radio {
 	return &Radio{
-		addr:          addr,
-		audioPath:     audioPath,
-		chunkWait:     chunkWait,
-		meta:          meta,
-		pcmDataOffset: pcmOffset,
-		clients:       make(map[net.Conn]struct{}),
-	}, nil
+		addr:    addr,
+		source:  source,
+		clients: make(map[net.Conn]struct{}),
+	}
 }
 
 // Run inicia o listener TCP e o loop de transmissão de áudio.
 func (r *Radio) Run() error {
+	defer func() {
+		if r.source != nil {
+			_ = r.source.Close()
+		}
+	}()
+
+	meta := r.source.Meta()
 	ln, err := net.Listen("tcp", r.addr)
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
 
-	log.Printf("[servidor] rádio iniciada em %s | arquivo: %s | formato: %s %dHz %dch %dbit | transmite só PCM",
-		r.addr, r.audioPath, r.meta.Codec, r.meta.SampleRate, r.meta.Channels, r.meta.BitsPerSample)
+	log.Printf("[servidor] rádio iniciada em %s | fonte: %s | formato: %s %dHz %dch %dbit",
+		r.addr, meta.Source, meta.Codec, meta.SampleRate, meta.Channels, meta.BitsPerSample)
 
 	go r.broadcastLoop()
 
@@ -68,20 +63,21 @@ func (r *Radio) Run() error {
 }
 
 func (r *Radio) addClient(conn net.Conn) {
-	if err := protocol.WriteMetaFrame(conn, r.meta); err != nil {
+	netx.EnableLowLatency(conn)
+	meta := r.source.Meta()
+	if err := protocol.WriteMetaFrame(conn, meta); err != nil {
 		_ = conn.Close()
 		log.Printf("[servidor] falha ao enviar metadados para %s: %v", conn.RemoteAddr(), err)
 		return
 	}
 	log.Printf("[servidor] metadados enviados para %s | codec=%s %dHz",
-		conn.RemoteAddr(), r.meta.Codec, r.meta.SampleRate)
+		conn.RemoteAddr(), meta.Codec, meta.SampleRate)
 
 	r.mu.Lock()
 	r.clients[conn] = struct{}{}
 	count := len(r.clients)
 	r.mu.Unlock()
 
-	r.listenerCount.Add(1)
 	log.Printf("[servidor] cliente conectado: %s | ouvintes ativos: %d", conn.RemoteAddr(), count)
 
 	go r.watchClient(conn)
@@ -114,48 +110,14 @@ func (r *Radio) watchClient(conn net.Conn) {
 
 func (r *Radio) broadcastLoop() {
 	for {
-		if err := r.streamFileOnce(); err != nil {
+		ctx := context.Background()
+		err := r.source.Stream(ctx, func(chunk []byte) error {
+			r.broadcast(chunk)
+			return nil
+		})
+		if err != nil {
 			log.Printf("[servidor] erro na transmissão: %v — tentando novamente em 2s", err)
 			time.Sleep(2 * time.Second)
-		}
-	}
-}
-
-func (r *Radio) streamFileOnce() error {
-	f, err := os.Open(r.audioPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if r.pcmDataOffset > 0 {
-		if _, err := f.Seek(r.pcmDataOffset, io.SeekStart); err != nil {
-			return fmt.Errorf("pular cabeçalho WAV: %w", err)
-		}
-	}
-
-	buf := make([]byte, protocol.ChunkSize)
-	for {
-		n, err := f.Read(buf)
-		if n > 0 {
-			chunk := make([]byte, n)
-			copy(chunk, buf[:n])
-			r.broadcast(chunk)
-			if r.chunkWait > 0 {
-				time.Sleep(r.chunkWait)
-			}
-		}
-		if err == io.EOF {
-			r.mu.RLock()
-			n := len(r.clients)
-			r.mu.RUnlock()
-			if n > 0 {
-				log.Printf("[servidor] fim do arquivo — reiniciando loop (%d ouvinte(s))", n)
-			}
-			return nil
-		}
-		if err != nil {
-			return err
 		}
 	}
 }
@@ -173,26 +135,43 @@ func (r *Radio) broadcast(payload []byte) {
 	}
 
 	seq := r.packetCount.Add(1)
-	var wg sync.WaitGroup
-	var failedMu sync.Mutex
 	var failed []net.Conn
-
 	for _, conn := range conns {
-		wg.Add(1)
-		go func(c net.Conn) {
-			defer wg.Done()
-			if err := protocol.WriteAudioFrame(c, payload); err != nil {
-				failedMu.Lock()
-				failed = append(failed, c)
-				failedMu.Unlock()
-			}
-		}(conn)
+		if err := protocol.WriteAudioFrame(conn, payload); err != nil {
+			failed = append(failed, conn)
+		}
 	}
-	wg.Wait()
 
 	if seq%50 == 0 || seq <= 3 {
 		log.Printf("[servidor] pacote #%d enviado (%d bytes) para %d ouvinte(s)", seq, len(payload), len(conns))
 	}
+
+	for _, c := range failed {
+		r.removeClient(c)
+	}
+}
+
+// BroadcastMeta envia metadados atualizados a todos os ouvintes conectados.
+func (r *Radio) BroadcastMeta(meta protocol.AudioMeta) {
+	r.mu.RLock()
+	conns := make([]net.Conn, 0, len(r.clients))
+	for c := range r.clients {
+		conns = append(conns, c)
+	}
+	r.mu.RUnlock()
+
+	if len(conns) == 0 {
+		return
+	}
+
+	var failed []net.Conn
+	for _, conn := range conns {
+		if err := protocol.WriteMetaFrame(conn, meta); err != nil {
+			failed = append(failed, conn)
+		}
+	}
+
+	log.Printf("[servidor] metadados atualizados | fonte=%s | %d ouvinte(s)", meta.Source, len(conns))
 
 	for _, c := range failed {
 		r.removeClient(c)
