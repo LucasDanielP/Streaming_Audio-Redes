@@ -1,4 +1,4 @@
-package server
+package wav
 
 import (
 	"encoding/binary"
@@ -11,7 +11,8 @@ import (
 	"streaming-audio-redes/internal/protocol"
 )
 
-func detectAudioMeta(path string) (protocol.AudioMeta, int64, uint32, error) {
+// DetectMeta lê metadados e offset PCM de um arquivo de áudio.
+func DetectMeta(path string) (protocol.AudioMeta, int64, uint32, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	meta := protocol.AudioMeta{Source: filepath.Base(path)}
 
@@ -21,13 +22,13 @@ func detectAudioMeta(path string) (protocol.AudioMeta, int64, uint32, error) {
 		meta.Container = "mp3"
 		return meta, 0, 0, nil
 	case ".wav":
-		return parseWAVMeta(path, meta)
+		return parseMeta(path, meta)
 	default:
 		return meta, 0, 0, fmt.Errorf("formato não suportado: %s", ext)
 	}
 }
 
-func parseWAVMeta(path string, meta protocol.AudioMeta) (protocol.AudioMeta, int64, uint32, error) {
+func parseMeta(path string, meta protocol.AudioMeta) (protocol.AudioMeta, int64, uint32, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return meta, 0, 0, err

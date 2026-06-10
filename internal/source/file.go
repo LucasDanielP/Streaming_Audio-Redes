@@ -1,4 +1,4 @@
-package server
+package source
 
 import (
 	"context"
@@ -7,40 +7,43 @@ import (
 	"log"
 	"os"
 
+	"streaming-audio-redes/internal/audio/pace"
+	"streaming-audio-redes/internal/audio/pcm"
+	"streaming-audio-redes/internal/audio/wav"
 	"streaming-audio-redes/internal/protocol"
 )
 
-// FileSource lê um arquivo de áudio em loop com envio em tempo real.
-type FileSource struct {
+// File transmite um arquivo de áudio em loop com pacing em tempo real.
+type File struct {
 	path          string
 	meta          protocol.AudioMeta
 	pcmDataOffset int64
 }
 
-// NewFileSource detecta metadados e prepara transmissão em loop.
-func NewFileSource(path string) (*FileSource, error) {
-	meta, pcmOffset, _, err := detectAudioMeta(path)
+// NewFile detecta metadados e prepara transmissão em loop.
+func NewFile(path string) (*File, error) {
+	meta, pcmOffset, _, err := wav.DetectMeta(path)
 	if err != nil {
 		return nil, err
 	}
-	return &FileSource{
+	return &File{
 		path:          path,
 		meta:          meta,
 		pcmDataOffset: pcmOffset,
 	}, nil
 }
 
-func (f *FileSource) Meta() protocol.AudioMeta {
+func (f *File) Meta() protocol.AudioMeta {
 	return f.meta
 }
 
-func (f *FileSource) Close() error {
+func (f *File) Close() error {
 	return nil
 }
 
-func (f *FileSource) Stream(ctx context.Context, emit func([]byte) error) error {
-	clock := newPaceClock(f.meta)
-	chunkBytes := alignedChunkBytes(f.meta.Channels)
+func (f *File) Stream(ctx context.Context, emit func([]byte) error) error {
+	clock := pace.New(f.meta)
+	chunkBytes := pcm.AlignedChunkSize(f.meta.Channels)
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -53,7 +56,7 @@ func (f *FileSource) Stream(ctx context.Context, emit func([]byte) error) error 
 	}
 }
 
-func (f *FileSource) streamOnce(ctx context.Context, emit func([]byte) error, clock *paceClock, chunkBytes int) error {
+func (f *File) streamOnce(ctx context.Context, emit func([]byte) error, clock *pace.Clock, chunkBytes int) error {
 	file, err := os.Open(f.path)
 	if err != nil {
 		return err

@@ -1,9 +1,9 @@
-package server
+package pcm
 
 import "streaming-audio-redes/internal/protocol"
 
-// PCMBytesPerSecond calcula a taxa de bytes do fluxo PCM.
-func PCMBytesPerSecond(meta protocol.AudioMeta) uint64 {
+// BytesPerSecond calcula a taxa de bytes do fluxo PCM.
+func BytesPerSecond(meta protocol.AudioMeta) uint64 {
 	if meta.SampleRate == 0 || meta.Channels == 0 || meta.BitsPerSample == 0 {
 		return 0
 	}

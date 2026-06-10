@@ -18,7 +18,9 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
-	"streaming-audio-redes/internal/server"
+	"streaming-audio-redes/internal/audio/capture"
+	"streaming-audio-redes/internal/broadcast"
+	"streaming-audio-redes/internal/studio"
 	"streaming-audio-redes/internal/ui"
 )
 
@@ -32,32 +34,36 @@ func formatTime(sec float64) string {
 }
 
 func main() {
+	/* Definindo as flags de entrada - endereço da rádio, microfone, taxa de amostragem e canais */
 	addr := flag.String("addr", ":9090", "endereço TCP da rádio")
 	inputDevice := flag.String("input", "", "microfone (substring do nome; vazio = padrão)")
 	sampleRate := flag.Uint("sample-rate", 44100, "taxa de amostragem (Hz)")
 	channels := flag.Uint("channels", 2, "canais (2=stéreo, igual aos WAV em assets/)")
 	flag.Parse()
 
-	studio := server.NewStudio(server.StudioConfig{
-		Live: server.LiveConfig{
+	/* Criando o board do estúdio - aqui é definido o dispositivo de entrada, a taxa de amostragem e o número de canais */ 
+	board := studio.New(studio.Config{
+		Live: capture.LiveConfig{
 			DeviceName: *inputDevice,
 			SampleRate: uint32(*sampleRate),
 			Channels:   uint16(*channels),
 		},
 	})
 
+	/* Adicionando as músicas ao board - aqui são adicionadas as músicas ao board */ 
 	for _, name := range []string{"musica.wav", "musica2.wav"} {
 		path := filepath.Join("assets", name)
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		if err := studio.AddTrack(path); err != nil {
+		if err := board.AddTrack(path); err != nil {
 			log.Printf("[estúdio] não foi possível pré-carregar %s: %v", name, err)
 		}
 	}
 
-	radio := server.New(*addr, studio)
-	studio.SetMetaChangeHandler(radio.BroadcastMeta)
+	/* Criando o radio - aqui é criado o radio que será usado para transmitir o áudio */ // -> Checar o broadcast/radio.go
+	radio := broadcast.New(*addr, board)
+	board.SetMetaChangeHandler(radio.BroadcastMeta)
 
 	go func() {
 		if err := radio.Run(); err != nil {
@@ -85,7 +91,7 @@ func main() {
 	trackTitle.TextStyle = fyne.TextStyle{Bold: true}
 
 	micToggle := widget.NewCheck("Microfone aberto", func(on bool) {
-		studio.SetMicEnabled(on)
+		board.SetMicEnabled(on)
 	})
 
 	micVolSlider := widget.NewSlider(0, 100)
@@ -95,7 +101,7 @@ func main() {
 	micVolValue.TextSize = 10
 	micVolValue.TextStyle = fyne.TextStyle{Monospace: true}
 	micVolSlider.OnChanged = func(v float64) {
-		studio.SetMicVolume(float32(v / 100))
+		board.SetMicVolume(float32(v / 100))
 		micVolValue.Text = strconv.Itoa(int(v)) + "%"
 		canvas.Refresh(micVolValue)
 	}
@@ -107,7 +113,7 @@ func main() {
 	musicVolValue.TextSize = 10
 	musicVolValue.TextStyle = fyne.TextStyle{Monospace: true}
 	musicVolSlider.OnChanged = func(v float64) {
-		studio.SetMusicVolume(float32(v / 100))
+		board.SetMusicVolume(float32(v / 100))
 		musicVolValue.Text = strconv.Itoa(int(v)) + "%"
 		canvas.Refresh(musicVolValue)
 	}
@@ -127,7 +133,7 @@ func main() {
 	)
 
 	refreshPlaylist := func() {
-		paths = studio.Playlist()
+		paths = board.Playlist()
 		playlistList.Refresh()
 	}
 
@@ -156,7 +162,7 @@ func main() {
 		if updatingTimeline {
 			return
 		}
-		studio.SeekMusicTo(v)
+		board.SeekMusicTo(v)
 	}
 
 	playBtn := widget.NewButton("▶ Tocar", func() {
@@ -164,13 +170,13 @@ func main() {
 			dialog.ShowInformation("Playlist", "Selecione uma faixa na lista.", w)
 			return
 		}
-		showError(studio.PlayTrack(paths[selected]))
+		showError(board.PlayTrack(paths[selected]))
 	})
-	stopMusicBtn := widget.NewButton("■ Parar", func() { studio.StopMusic() })
-	seekFwdBtn := widget.NewButton("+10s", func() { studio.SeekMusicForward(10) })
+	stopMusicBtn := widget.NewButton("■ Parar", func() { board.StopMusic() })
+	seekFwdBtn := widget.NewButton("+10s", func() { board.SeekMusicForward(10) })
 	silenceBtn := widget.NewButton("Fora do ar", func() {
 		micToggle.SetChecked(false)
-		studio.StopOnAir()
+		board.StopOnAir()
 	})
 
 	addBtn := widget.NewButton("Adicionar música…", func() {
@@ -179,7 +185,7 @@ func main() {
 				return
 			}
 			defer reader.Close()
-			showError(studio.AddTrack(reader.URI().Path()))
+			showError(board.AddTrack(reader.URI().Path()))
 			fyne.Do(refreshPlaylist)
 		}, w)
 	})
@@ -187,12 +193,12 @@ func main() {
 		if selected < 0 || selected >= len(paths) {
 			return
 		}
-		studio.RemoveTrack(paths[selected])
+		board.RemoveTrack(paths[selected])
 		selected = -1
 		refreshPlaylist()
 	})
 
-	refreshTimeline := func(snap server.StudioSnapshot) {
+	refreshTimeline := func(snap studio.Snapshot) {
 		updatingTimeline = true
 		defer func() { updatingTimeline = false }()
 
@@ -215,7 +221,7 @@ func main() {
 	}
 
 	refreshStatus := func() {
-		snap := studio.Snapshot()
+		snap := board.Snapshot()
 		listeners, packets := radio.Stats()
 		onAir := snap.OnAir != "Silêncio"
 		ui.SetOnAir(onAirBadge, onAir)

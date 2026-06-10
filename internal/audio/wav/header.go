@@ -1,4 +1,4 @@
-package client
+package wav
 
 import (
 	"encoding/binary"
@@ -7,11 +7,11 @@ import (
 	"streaming-audio-redes/internal/protocol"
 )
 
-// wavPCMHeaderSize é o tamanho do cabeçalho WAV PCM padrão (44 bytes).
-const wavPCMHeaderSize = 44
+const pcmHeaderSize = 44
 
-func buildWAVHeader(meta protocol.AudioMeta) []byte {
-	hdr := make([]byte, wavPCMHeaderSize)
+// BuildPCMHeader monta cabeçalho WAV PCM padrão (44 bytes).
+func BuildPCMHeader(meta protocol.AudioMeta) []byte {
+	hdr := make([]byte, pcmHeaderSize)
 	copy(hdr[0:4], "RIFF")
 	copy(hdr[8:12], "WAVE")
 	copy(hdr[12:16], "fmt ")
@@ -25,11 +25,11 @@ func buildWAVHeader(meta protocol.AudioMeta) []byte {
 	binary.LittleEndian.PutUint16(hdr[32:34], blockAlign)
 	binary.LittleEndian.PutUint16(hdr[34:36], meta.BitsPerSample)
 	copy(hdr[36:40], "data")
-	// pcm size e chunk size atualizados por updateWAVSizes
 	return hdr
 }
 
-func updateWAVSizes(f *os.File, pcmBytes uint32) error {
+// UpdatePCMSizes finaliza tamanhos RIFF/data em um arquivo WAV aberto.
+func UpdatePCMSizes(f *os.File, pcmBytes uint32) error {
 	chunkSize := uint32(36) + pcmBytes
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, chunkSize)

@@ -1,4 +1,4 @@
-package server
+package studio
 
 import (
 	"fmt"
@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"streaming-audio-redes/internal/audio/pcm"
+	"streaming-audio-redes/internal/audio/wav"
 	"streaming-audio-redes/internal/protocol"
 )
 
@@ -40,7 +42,7 @@ func NewMusicPlayer() *MusicPlayer {
 }
 
 func (p *MusicPlayer) Open(path string) error {
-	meta, offset, pcmSize, err := detectAudioMeta(path)
+	meta, offset, pcmSize, err := wav.DetectMeta(path)
 	if err != nil {
 		return err
 	}
@@ -109,7 +111,7 @@ func (p *MusicPlayer) Progress() MusicProgress {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	bps := PCMBytesPerSecond(p.meta)
+	bps := pcm.BytesPerSecond(p.meta)
 	var posSec, durSec float64
 	if bps > 0 {
 		posSec = float64(p.position) / float64(bps)
@@ -149,7 +151,7 @@ func (p *MusicPlayer) SeekForward(seconds float64) {
 	if p.file == nil {
 		return
 	}
-	bps := PCMBytesPerSecond(p.meta)
+	bps := pcm.BytesPerSecond(p.meta)
 	if bps == 0 {
 		return
 	}
@@ -201,7 +203,7 @@ func (p *MusicPlayer) applyPendingSeekLocked() {
 		return
 	}
 
-	bps := PCMBytesPerSecond(p.meta)
+	bps := pcm.BytesPerSecond(p.meta)
 	if bps == 0 {
 		p.hasPendingSeek = false
 		p.pendingSeekSec = -1

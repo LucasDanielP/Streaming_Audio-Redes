@@ -11,24 +11,24 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
-	"streaming-audio-redes/internal/client"
+	"streaming-audio-redes/internal/listener"
 	"streaming-audio-redes/internal/ui"
 )
 
 type session struct {
 	mu       sync.Mutex
-	listener *client.Listener
+	listener *listener.Listener
 	running  bool
 }
 
-func (s *session) setListener(l *client.Listener) {
+func (s *session) setListener(l *listener.Listener) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.listener = l
 	s.running = l != nil
 }
 
-func (s *session) getListener() *client.Listener {
+func (s *session) getListener() *listener.Listener {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.listener
@@ -113,8 +113,8 @@ func main() {
 		}
 
 		st := l.Stats()
-		connected := st.State != client.StateStopped
-		playing := st.State == client.StatePlaying
+		connected := st.State != listener.StateStopped
+		playing := st.State == listener.StatePlaying
 		ui.SetOnAir(onAirBadge, connected)
 		vuMeter.SetActive(playing)
 
@@ -160,7 +160,7 @@ func main() {
 			output = "-"
 		}
 
-		l := client.New(addrEntry.Text, output, playCheck.Checked)
+		l := listener.New(addrEntry.Text, output, playCheck.Checked)
 		sess.setListener(l)
 		connectStart = time.Now()
 		elapsedSec = 0

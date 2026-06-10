@@ -1,4 +1,4 @@
-package server
+package studio
 
 import (
 	"context"
@@ -7,12 +7,16 @@ import (
 	"path/filepath"
 	"sync"
 
+	"streaming-audio-redes/internal/audio/capture"
+	"streaming-audio-redes/internal/audio/pace"
+	"streaming-audio-redes/internal/audio/pcm"
+	"streaming-audio-redes/internal/audio/wav"
 	"streaming-audio-redes/internal/protocol"
 )
 
 // Studio é a mesa do locutor com mixagem de música + microfone.
 type Studio struct {
-	liveCfg LiveConfig
+	liveCfg capture.LiveConfig
 
 	mu sync.Mutex
 
@@ -28,13 +32,13 @@ type Studio struct {
 	onMetaChange func(protocol.AudioMeta)
 }
 
-// StudioConfig configura o estúdio.
-type StudioConfig struct {
-	Live LiveConfig
+// Config configura o estúdio.
+type Config struct {
+	Live capture.LiveConfig
 }
 
 // NewStudio cria a mesa do locutor.
-func NewStudio(cfg StudioConfig) *Studio {
+func New(cfg Config) *Studio {
 	if cfg.Live.SampleRate == 0 {
 		cfg.Live.SampleRate = 44100
 	}
@@ -76,11 +80,11 @@ func (s *Studio) Stream(ctx context.Context, emit func([]byte) error) error {
 	outMeta := s.outputMeta()
 	s.notifyMeta(outMeta)
 
-	clock := newPaceClock(outMeta)
+	clock := pace.New(outMeta)
 	log.Printf("[estúdio] mixer | %dHz %dch 16-bit PCM — pacing por relógio",
 		outMeta.SampleRate, outMeta.Channels)
 
-	chunkBytes := alignedChunkBytes(outMeta.Channels)
+	chunkBytes := pcm.AlignedChunkSize(outMeta.Channels)
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -104,7 +108,7 @@ func (s *Studio) Stream(ctx context.Context, emit func([]byte) error) error {
 				log.Printf("[estúdio] faixa encerrada")
 			}
 		} else {
-			musicPCM = silencePCM(chunkBytes)
+			musicPCM = pcm.Silence(chunkBytes)
 		}
 
 		var micPCM []byte
@@ -112,13 +116,13 @@ func (s *Studio) Stream(ctx context.Context, emit func([]byte) error) error {
 			micPCM = mic.Read(chunkBytes)
 		} else {
 			mic.Flush()
-			micPCM = silencePCM(chunkBytes)
+			micPCM = pcm.Silence(chunkBytes)
 		}
 
-		mixed := MixPCM16(musicPCM, micPCM, musicVol, micVol)
+		mixed := pcm.Mix16(musicPCM, micPCM, musicVol, micVol)
 
 		curMeta := s.outputMeta()
-		if !samePCMFormat(curMeta, clock.meta) {
+		if !pace.SameFormat(curMeta, clock.Meta()) {
 			clock.Reset(curMeta)
 		}
 
@@ -129,15 +133,6 @@ func (s *Studio) Stream(ctx context.Context, emit func([]byte) error) error {
 			return err
 		}
 	}
-}
-
-func alignedChunkBytes(channels uint16) int {
-	frame := int(channels) * 2
-	if frame <= 0 {
-		frame = 4
-	}
-	n := protocol.ChunkSize
-	return (n / frame) * frame
 }
 
 func (s *Studio) outputMeta() protocol.AudioMeta {
@@ -189,7 +184,7 @@ func (s *Studio) SeekMusicTo(seconds float64) {
 }
 
 func (s *Studio) PlayTrack(path string) error {
-	fileMeta, _, _, err := detectAudioMeta(path)
+	fileMeta, _, _, err := wav.DetectMeta(path)
 	if err != nil {
 		return err
 	}
@@ -229,7 +224,7 @@ func (s *Studio) StopOnAir() {
 }
 
 func (s *Studio) AddTrack(path string) error {
-	meta, _, _, err := detectAudioMeta(path)
+	meta, _, _, err := wav.DetectMeta(path)
 	if err != nil {
 		return err
 	}
@@ -271,7 +266,7 @@ func (s *Studio) Playlist() []string {
 	return out
 }
 
-func (s *Studio) Snapshot() StudioSnapshot {
+func (s *Studio) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -290,7 +285,7 @@ func (s *Studio) Snapshot() StudioSnapshot {
 
 	progress := s.music.Progress()
 
-	return StudioSnapshot{
+	return Snapshot{
 		OnAir:            onAir,
 		Playlist:         playlist,
 		MusicPath:        s.music.CurrentPath(),
@@ -303,7 +298,7 @@ func (s *Studio) Snapshot() StudioSnapshot {
 	}
 }
 
-type StudioSnapshot struct {
+type Snapshot struct {
 	OnAir            string
 	Playlist         []string
 	MusicPath        string
@@ -316,7 +311,7 @@ type StudioSnapshot struct {
 }
 
 func (s *Studio) validateTrack(path string) error {
-	meta, _, _, err := detectAudioMeta(path)
+	meta, _, _, err := wav.DetectMeta(path)
 	if err != nil {
 		return err
 	}

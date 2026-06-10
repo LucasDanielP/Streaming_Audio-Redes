@@ -1,4 +1,4 @@
-package server
+package broadcast
 
 import (
 	"context"
@@ -14,17 +14,21 @@ import (
 
 // Radio é o servidor TCP que transmite áudio para todos os clientes conectados.
 type Radio struct {
+	/* Definindo as variáveis do radio - endereço da rádio, fonte de áudio, mutex para proteger o acesso aos clientes e o contador de pacotes */
 	addr   string
-	source AudioSource
-
+	source Source
 	mu      sync.RWMutex
-	clients map[net.Conn]struct{}
-
+	clients map[net.Conn]struct{} // -> map[net.Conn]struct{} é uma map de conexões TCP
 	packetCount atomic.Uint64
 }
 
-// New cria um servidor de rádio com a fonte de áudio informada.
-func New(addr string, source AudioSource) *Radio {
+/**
+* Cria um novo servidor de rádio com o endereço e fonte de áudio informados.
+* @param addr - endereço da rádio
+* @param source - fonte de áudio
+* @return *Radio - ponteiro para o servidor de rádio
+*/
+func New(addr string, source Source) *Radio {
 	return &Radio{
 		addr:    addr,
 		source:  source,
@@ -32,19 +36,30 @@ func New(addr string, source AudioSource) *Radio {
 	}
 }
 
-// Run inicia o listener TCP e o loop de transmissão de áudio.
+/**
+* Inicia o listener TCP e o loop de transmissão de áudio.
+* Não possui parâmetros de entrada.
+* @return error - erro se o listener TCP falhar
+* @return nil se o listener TCP for iniciado com sucesso
+*/
 func (r *Radio) Run() error {
+	/* Definindo o defer para fechar a fonte de áudio se ela não for nil */
 	defer func() {
 		if r.source != nil {
 			_ = r.source.Close()
 		}
 	}()
 
+	/* Definindo as variáveis do meta - fonte de áudio, listener TCP e erro */
 	meta := r.source.Meta()
+	/* Definindo o listener TCP - aqui é criado o listener TCP que será usado para aceitar as conexões dos clientes */
+	/* Retorna erro se o listener TCP falhar */
 	ln, err := net.Listen("tcp", r.addr)
+	/* Verificacão de erro - se o listener TCP falhar, retorna o erro */
 	if err != nil {
 		return err
 	}
+	/* Definindo o defer para fechar o listener TCP */
 	defer ln.Close()
 
 	log.Printf("[servidor] rádio iniciada em %s | fonte: %s | formato: %s %dHz %dch %dbit",

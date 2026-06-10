@@ -1,19 +1,20 @@
-package server
+package pcm
 
 import "sync"
 
-// pcmRing guarda PCM recente com teto (evita crescimento infinito).
-type pcmRing struct {
+// Ring guarda PCM recente com teto (evita crescimento infinito).
+type Ring struct {
 	mu      sync.Mutex
 	data    []byte
 	maxSize int
 }
 
-func newPCMRing(maxSize int) *pcmRing {
-	return &pcmRing{maxSize: maxSize}
+// NewRing cria um buffer circular de bytes PCM.
+func NewRing(maxSize int) *Ring {
+	return &Ring{maxSize: maxSize}
 }
 
-func (r *pcmRing) Write(p []byte) {
+func (r *Ring) Write(p []byte) {
 	if len(p) == 0 {
 		return
 	}
@@ -28,7 +29,7 @@ func (r *pcmRing) Write(p []byte) {
 	}
 }
 
-func (r *pcmRing) Read(n int) []byte {
+func (r *Ring) Read(n int) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]byte, n)
@@ -42,7 +43,7 @@ func (r *pcmRing) Read(n int) []byte {
 	return out
 }
 
-func (r *pcmRing) Clear() {
+func (r *Ring) Clear() {
 	r.mu.Lock()
 	r.data = nil
 	r.mu.Unlock()

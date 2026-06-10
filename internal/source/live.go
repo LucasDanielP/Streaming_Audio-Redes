@@ -1,27 +1,20 @@
-package server
+package source
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 
 	"github.com/gen2brain/malgo"
 
+	"streaming-audio-redes/internal/audio/capture"
 	"streaming-audio-redes/internal/protocol"
 )
 
-// LiveConfig configura a captura do microfone.
-type LiveConfig struct {
-	DeviceName string // substring do nome; vazio = dispositivo padrão do sistema
-	SampleRate uint32
-	Channels   uint16
-}
-
-// LiveSource captura áudio ao vivo do microfone e expõe como PCM 16-bit.
-type LiveSource struct {
-	cfg  LiveConfig
+// Live captura áudio ao vivo do microfone e expõe como PCM 16-bit.
+type Live struct {
+	cfg  capture.LiveConfig
 	meta protocol.AudioMeta
 
 	mu       sync.Mutex
@@ -30,8 +23,8 @@ type LiveSource struct {
 	stopCh   chan struct{}
 }
 
-// NewLiveSource prepara captura ao vivo a partir do microfone padrão ou nomeado.
-func NewLiveSource(cfg LiveConfig) (*LiveSource, error) {
+// NewLive prepara captura ao vivo a partir do microfone padrão ou nomeado.
+func NewLive(cfg capture.LiveConfig) (*Live, error) {
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = 44100
 	}
@@ -44,7 +37,7 @@ func NewLiveSource(cfg LiveConfig) (*LiveSource, error) {
 		sourceLabel = cfg.DeviceName
 	}
 
-	return &LiveSource{
+	return &Live{
 		cfg: cfg,
 		meta: protocol.AudioMeta{
 			Codec:         "pcm",
@@ -59,43 +52,21 @@ func NewLiveSource(cfg LiveConfig) (*LiveSource, error) {
 	}, nil
 }
 
-func (l *LiveSource) Meta() protocol.AudioMeta {
+func (l *Live) Meta() protocol.AudioMeta {
 	return l.meta
 }
 
-func (l *LiveSource) Close() error {
+func (l *Live) Close() error {
 	l.stopOnce.Do(func() { close(l.stopCh) })
 	return nil
 }
 
 // ListCaptureDevices retorna os dispositivos de entrada disponíveis.
 func ListCaptureDevices() ([]string, error) {
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = ctx.Uninit()
-		ctx.Free()
-	}()
-
-	devices, err := ctx.Devices(malgo.Capture)
-	if err != nil {
-		return nil, err
-	}
-
-	names := make([]string, 0, len(devices))
-	for _, d := range devices {
-		label := d.Name()
-		if d.IsDefault != 0 {
-			label += " (padrão)"
-		}
-		names = append(names, label)
-	}
-	return names, nil
+	return capture.ListDevices()
 }
 
-func (l *LiveSource) Stream(ctx context.Context, emit func([]byte) error) error {
+func (l *Live) Stream(ctx context.Context, emit func([]byte) error) error {
 	audioCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
 		log.Printf("[servidor/captura] %s", message)
 	})
@@ -114,7 +85,7 @@ func (l *LiveSource) Stream(ctx context.Context, emit func([]byte) error) error 
 	deviceConfig.Alsa.NoMMap = 1
 
 	if l.cfg.DeviceName != "" {
-		id, name, err := findCaptureDevice(audioCtx, l.cfg.DeviceName)
+		id, name, err := capture.FindDevice(audioCtx, l.cfg.DeviceName)
 		if err != nil {
 			return err
 		}
@@ -155,7 +126,6 @@ func (l *LiveSource) Stream(ctx context.Context, emit func([]byte) error) error 
 					l.mu.Unlock()
 					return
 				default:
-					// Clientes lentos: descarta chunk antigo e mantém o fluxo ao vivo.
 					select {
 					case <-l.chunkCh:
 					default:
@@ -195,19 +165,4 @@ func (l *LiveSource) Stream(ctx context.Context, emit func([]byte) error) error 
 			}
 		}
 	}
-}
-
-func findCaptureDevice(ctx *malgo.AllocatedContext, nameQuery string) (malgo.DeviceID, string, error) {
-	devices, err := ctx.Devices(malgo.Capture)
-	if err != nil {
-		return malgo.DeviceID{}, "", err
-	}
-
-	query := strings.ToLower(strings.TrimSpace(nameQuery))
-	for _, d := range devices {
-		if strings.Contains(strings.ToLower(d.Name()), query) {
-			return d.ID, d.Name(), nil
-		}
-	}
-	return malgo.DeviceID{}, "", fmt.Errorf("dispositivo de entrada não encontrado: %q", nameQuery)
 }

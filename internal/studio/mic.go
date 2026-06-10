@@ -1,4 +1,4 @@
-package server
+package studio
 
 import (
 	"context"
@@ -8,33 +8,32 @@ import (
 
 	"github.com/gen2brain/malgo"
 
+	"streaming-audio-redes/internal/audio/capture"
+	"streaming-audio-redes/internal/audio/pcm"
 	"streaming-audio-redes/internal/protocol"
 )
 
 // MicCapture captura o microfone continuamente em um ring buffer.
 type MicCapture struct {
-	cfg  LiveConfig
-	ring *pcmRing
+	cfg  capture.LiveConfig
+	ring *pcm.Ring
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-func NewMicCapture(cfg LiveConfig) *MicCapture {
-	meta := protocol.AudioMeta{
-		SampleRate:    cfg.SampleRate,
-		Channels:      cfg.Channels,
-		BitsPerSample: 16,
-	}
-	bps := int(PCMBytesPerSecond(meta))
+func NewMicCapture(cfg capture.LiveConfig) *MicCapture {
+	bps := int(pcm.BytesPerSecond(protocol.AudioMeta{
+		SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitsPerSample: 16,
+	}))
 	ringCap := bps / 10 // ~100 ms — evita voz atrasada ao ativar o microfone
 	if ringCap < 4096 {
 		ringCap = 4096
 	}
 	return &MicCapture{
 		cfg:  cfg,
-		ring: newPCMRing(ringCap),
+		ring: pcm.NewRing(ringCap),
 	}
 }
 
@@ -95,7 +94,7 @@ func (m *MicCapture) run(ctx context.Context) error {
 	deviceConfig.Alsa.NoMMap = 1
 
 	if m.cfg.DeviceName != "" {
-		id, name, err := findCaptureDevice(audioCtx, m.cfg.DeviceName)
+		id, name, err := capture.FindDevice(audioCtx, m.cfg.DeviceName)
 		if err != nil {
 			return err
 		}
